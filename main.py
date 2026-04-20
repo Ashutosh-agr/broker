@@ -4,8 +4,9 @@ import time
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, Form, HTTPException, Query
+from fastapi import Depends, FastAPI, Form, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 app = FastAPI(title="Minimal OAuth Broker")
 
@@ -32,6 +33,16 @@ AUTH0_CLIENT_SECRET = os.getenv("AUTH0_CLIENT_SECRET") or os.getenv("OKTA_CLIENT
 # In-memory stores (prototype only)
 state_store: dict[str, dict[str, str]] = {}
 token_store: dict[str, dict] = {}
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def require_bearer_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str:
+    # Minimal protection: only require a Bearer token to be present.
+    if not credentials or credentials.scheme.lower() != "bearer" or not credentials.credentials:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return credentials.credentials
 
 
 @app.get("/oauth/authorize")
@@ -138,3 +149,13 @@ async def oauth_token(
         "token_type": "Bearer",
         "expires_in": expires_in,
     }
+
+
+@app.get("/protected")
+async def protected_endpoint(token: str = Depends(require_bearer_token)):
+    return {
+        "message": "Authorized request",
+        "token_received": True,
+        "token_preview": f"{token[:8]}..." if len(token) > 8 else token,
+    }
+
