@@ -13,18 +13,21 @@ app = FastAPI(title="Minimal OAuth Broker")
 # authorization_url = http://localhost:8000/oauth/authorize
 # token_url = http://localhost:8000/oauth/token
 
-# Okta setup (env-overridable)
-OKTA_DOMAIN = os.getenv("OKTA_DOMAIN", "https://dev-anhyvdf7hdpo4nwf.us.auth0.com")
-OKTA_AUTHORIZE_URL = f"{OKTA_DOMAIN}/v1/authorize"
-OKTA_TOKEN_URL = f"{OKTA_DOMAIN}/v1/token"
+# Auth0 setup (env-overridable)
+AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN") or os.getenv(
+    "OKTA_DOMAIN", "https://dev-anhyvdf7hdpo4nwf.us.auth0.com"
+)
+AUTH0_BASE = AUTH0_DOMAIN.rstrip("/")
+AUTH0_AUTHORIZE_URL = f"{AUTH0_BASE}/authorize"
+AUTH0_TOKEN_URL = f"{AUTH0_BASE}/oauth/token"
 
 # Broker callback setup (env-overridable)
 BROKER_BASE = os.getenv("BROKER_BASE", "http://localhost:8000")
 BROKER_CALLBACK = f"{BROKER_BASE}/oauth/callback"
 
 # Required credentials from environment
-OKTA_CLIENT_ID = os.getenv("OKTA_CLIENT_ID")
-OKTA_CLIENT_SECRET = os.getenv("OKTA_CLIENT_SECRET")
+AUTH0_CLIENT_ID = os.getenv("AUTH0_CLIENT_ID") or os.getenv("OKTA_CLIENT_ID")
+AUTH0_CLIENT_SECRET = os.getenv("AUTH0_CLIENT_SECRET") or os.getenv("OKTA_CLIENT_SECRET")
 
 # In-memory stores (prototype only)
 state_store: dict[str, dict[str, str]] = {}
@@ -43,8 +46,11 @@ async def oauth_authorize(
     if response_type != "code":
         raise HTTPException(status_code=400, detail="response_type must be code")
 
-    if not OKTA_CLIENT_ID or not OKTA_CLIENT_SECRET:
-        raise HTTPException(status_code=500, detail="Missing OKTA_CLIENT_ID or OKTA_CLIENT_SECRET")
+    if not AUTH0_CLIENT_ID or not AUTH0_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="Missing AUTH0_CLIENT_ID/AUTH0_CLIENT_SECRET (or OKTA_CLIENT_ID/OKTA_CLIENT_SECRET)",
+        )
 
     # Save ChatGPT callback details under an internal broker state.
     broker_state = secrets.token_urlsafe(24)
@@ -54,17 +60,17 @@ async def oauth_authorize(
         "created_at": str(int(time.time())),
     }
 
-    # Redirect to Okta using the broker callback (not the ChatGPT callback).
-    okta_query = urlencode(
+    # Redirect to Auth0 using the broker callback (not the ChatGPT callback).
+    auth0_query = urlencode(
         {
             "response_type": "code",
-            "client_id": OKTA_CLIENT_ID,
+            "client_id": AUTH0_CLIENT_ID,
             "redirect_uri": BROKER_CALLBACK,
             "scope": "openid profile email",
             "state": broker_state,
         }
     )
-    return RedirectResponse(url=f"{OKTA_AUTHORIZE_URL}?{okta_query}", status_code=302)
+    return RedirectResponse(url=f"{AUTH0_AUTHORIZE_URL}?{auth0_query}", status_code=302)
 
 
 @app.get("/oauth/callback")
@@ -77,7 +83,7 @@ async def oauth_callback(code: str = Query(...), state: str = Query(...)):
     chatgpt_redirect_uri = authorize_data["chatgpt_redirect_uri"]
     chatgpt_state = authorize_data["chatgpt_state"]
 
-    # Exchange Okta auth code for tokens.
+    # Exchange Auth0 auth code for tokens.
     form_data = {
         "grant_type": "authorization_code",
         "code": code,
@@ -86,20 +92,20 @@ async def oauth_callback(code: str = Query(...), state: str = Query(...)):
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         token_resp = await client.post(
-            OKTA_TOKEN_URL,
+            AUTH0_TOKEN_URL,
             data=form_data,
-            auth=(OKTA_CLIENT_ID, OKTA_CLIENT_SECRET),
+            auth=(AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET),
             headers={"Accept": "application/json"},
         )
 
     if token_resp.status_code != 200:
-        raise HTTPException(status_code=400, detail=f"Okta token exchange failed: {token_resp.text}")
+        raise HTTPException(status_code=400, detail=f"Auth0 token exchange failed: {token_resp.text}")
 
-    okta_token_json = token_resp.json()
+    auth0_token_json = token_resp.json()
 
     # Create one-time broker code that ChatGPT will exchange at /oauth/token.
     broker_code = secrets.token_urlsafe(24)
-    token_store[broker_code] = okta_token_json
+    token_store[broker_code] = auth0_token_json
 
     redirect_query = urlencode({"code": broker_code, "state": chatgpt_state})
     return RedirectResponse(url=f"{chatgpt_redirect_uri}?{redirect_query}", status_code=302)
@@ -118,14 +124,14 @@ async def oauth_token(
     if code not in token_store:
         raise HTTPException(status_code=400, detail="Invalid or already used code")
 
-    # Consume one-time code and return Okta access token directly.
-    okta_token_json = token_store.pop(code)
-    access_token = okta_token_json.get("access_token")
-    raw_expires_in = okta_token_json.get("expires_in", 3600)
+    # Consume one-time code and return Auth0 access token directly.
+    auth0_token_json = token_store.pop(code)
+    access_token = auth0_token_json.get("access_token")
+    raw_expires_in = auth0_token_json.get("expires_in", 3600)
     expires_in = int(raw_expires_in) if str(raw_expires_in).isdigit() else 3600
 
     if not access_token:
-        raise HTTPException(status_code=400, detail="No access_token found in Okta response")
+        raise HTTPException(status_code=400, detail="No access_token found in Auth0 response")
 
     return {
         "access_token": access_token,
