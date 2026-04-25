@@ -19,8 +19,8 @@ AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN") or os.getenv(
     "OKTA_DOMAIN", "https://dev-anhyvdf7hdpo4nwf.us.auth0.com"
 )
 AUTH0_BASE = AUTH0_DOMAIN.rstrip("/")
-AUTH0_AUTHORIZE_URL = f"{AUTH0_BASE}/authorize"
-AUTH0_TOKEN_URL = f"{AUTH0_BASE}/oauth/token"
+AUTH0_AUTHORIZE_URL = f"{AUTH0_BASE}/v1/authorize"
+AUTH0_TOKEN_URL = f"{AUTH0_BASE}/v1/token"
 
 # Broker callback setup (env-overridable)
 BROKER_BASE = os.getenv("BROKER_BASE", "http://localhost:8000")
