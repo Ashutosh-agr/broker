@@ -69,7 +69,7 @@ async def oauth_authorize(
         print("[authorize] missing OKTA_CLIENT_ID/OKTA_CLIENT_SECRET", flush=True)
         raise HTTPException(
             status_code=500,
-            detail="Missing AUTH0_CLIENT_ID/AUTH0_CLIENT_SECRET (or OKTA_CLIENT_ID/OKTA_CLIENT_SECRET)",
+            detail="Missing OKTA_CLIENT_ID/OKTA_CLIENT_SECRET (or OKTA_CLIENT_ID/OKTA_CLIENT_SECRET)",
         )
 
     # Save ChatGPT callback details under an internal broker state.
@@ -82,7 +82,7 @@ async def oauth_authorize(
     print(f"[authorize] stored broker_state={broker_state[:8]}...", flush=True)
 
     # Redirect to Auth0 using the broker callback (not the ChatGPT callback).
-    auth0_query = urlencode(
+    okta_query = urlencode(
         {
             "response_type": "code",
             "client_id": OKTA_CLIENT_ID,
@@ -92,7 +92,7 @@ async def oauth_authorize(
         }
     )
     print("[authorize] redirecting to upstream authorize endpoint", flush=True)
-    return RedirectResponse(url=f"{OKTA_AUTHORIZE_URL}?{auth0_query}", status_code=302)
+    return RedirectResponse(url=f"{OKTA_AUTHORIZE_URL}?{okta_query}", status_code=302)
 
 
 @app.get("/oauth/callback")
@@ -129,11 +129,11 @@ async def oauth_callback(code: str = Query(...), state: str = Query(...)):
         print(f"[callback] token exchange failed body={token_resp.text}", flush=True)
         raise HTTPException(status_code=400, detail=f"Auth0 token exchange failed: {token_resp.text}")
 
-    auth0_token_json = token_resp.json()
+    okta_token_json = token_resp.json()
 
     # Create one-time broker code that ChatGPT will exchange at /oauth/token.
     broker_code = secrets.token_urlsafe(24)
-    token_store[broker_code] = auth0_token_json
+    token_store[broker_code] = okta_token_json
     print(f"[callback] stored broker_code={broker_code[:8]}...", flush=True)
 
     redirect_query = urlencode({"code": broker_code, "state": chatgpt_state})
@@ -159,9 +159,9 @@ async def oauth_token(
         raise HTTPException(status_code=400, detail="Invalid or already used code")
 
     # Consume one-time code and return Auth0 access token directly.
-    auth0_token_json = token_store.pop(code)
-    access_token = auth0_token_json.get("access_token")
-    raw_expires_in = auth0_token_json.get("expires_in", 3600)
+    okta_token_json = token_store.pop(code)
+    access_token = okta_token_json.get("access_token")
+    raw_expires_in = okta_token_json.get("expires_in", 3600)
     expires_in = int(raw_expires_in) if str(raw_expires_in).isdigit() else 3600
 
     if not access_token:
